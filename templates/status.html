@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Home</title>
+	<script>
+		document.addEventListener("DOMContentLoaded", function(){
+
+			// Step 3
+			document.querySelector("#submit_youtube_playlist_id").addEventListener("click", function(){
+				var playlist_id = document.querySelector("#youtube_playlist_id").value;
+				if(!playlist_id)	return;
+				else            	location.href = "/read_youtube_playlist?youtube_playlist_id=" + encodeURIComponent(playlist_id);
+			});
+			
+		});
+	</script>
+</head>
+<body>
+	<p>
+		Current session: {{ session_id }}<br>
+		<a href="/remove_session">[ End session ]</a>
+	</p>
+	<p>
+		Step 1: Login to services:
+		<a href="/auth_spotify">Spotify</a>
+		<a href="/auth_youtube">YouTube</a>
+	</p>
+	<p>
+		Step 2: Request tokens:
+		<a href="/request_token?service=spotify">Spotify</a>
+		<a href="/request_token?service=youtube">YouTube</a>
+	</p>
+	<p>
+		Step 3: Enter YouTube playlist id:
+		<input id="youtube_playlist_id" placeholder="Enter YouTube playlist id"> <button id="submit_youtube_playlist_id">Submit</button>
+	</p>
+	<p>
+		Authenticated services:
+		{% for key, value in auths.items() %}
+			<div>
+				<h3>{{key}}</h3>
+				<pre>{{value}}</pre>
+			</div>
+		{% endfor %}
+	</p>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Preview Mappings</title>
+</head>
+<body>
+	<h1>YouTube playlist {{ youtube_playlist_id }}</h1>
+	<table border>
+	<thead>
+		<tr>
+			<th>YouTube Name</th>
+			<th>Spotify Name</th>
+			<th>Spotify URI</th>
+		</tr>
+	</thead>
+	<tbody>
+		{% for item in items %}
+		<tr>
+			<td>{{ item.youtube }}</td>
+			<td>{{ item.spotify.name }}</td>
+			<td>{{ item.spotify.uri }}</td>
+		</tr>
+		{% endfor %}
+	</tbody>
+	</table>
+</body>
+</html>

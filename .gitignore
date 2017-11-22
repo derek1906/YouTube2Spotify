@@ -1,0 +1,5 @@
+# Don't share client secrets
+client_info.json
+*.pyc
+Thumbs.db
+.DS_Store
