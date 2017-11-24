@@ -1,18 +1,14 @@
 """Translate YouTube playlist into Spotify playlist"""
 
 from __future__ import print_function
-from urllib import urlencode
 from uuid import uuid4
 import hashlib
 import json
-import cgi
 import os
 import sys
 import traceback
-import time
 import re
 
-import requests
 import flask
 from flask_api import status
 
@@ -37,7 +33,7 @@ if not os.path.isfile(CLIENT_INFO_FILE):
 with open(CLIENT_INFO_FILE) as info:
     try:
         CLIENT_INFO = json.load(info)
-    except Exception:
+    except ValueError:
         traceback.print_exc()
         print("Cannot parse {}, aborting.".format(CLIENT_INFO_FILE))
         sys.exit(1)
@@ -59,15 +55,6 @@ SCOPES = {
     )
 }
 
-
-"""
-Callback URIs
-"""
-DOMAIN = "http://localhost:5000"
-SPOTIFY_AUTH_REDIRECT_ROUTE_NAME = "/spotify-authorization-callback"
-SPOTIFY_AUTH_REDIRECT_URI = DOMAIN + SPOTIFY_AUTH_REDIRECT_ROUTE_NAME
-YOUTUBE_AUTH_REDIRECT_ROUTE_NAME = "/youtube-authorization-callback"
-YOUTUBE_AUTH_REDIRECT_URI = DOMAIN + YOUTUBE_AUTH_REDIRECT_ROUTE_NAME
 
 """
 App configurations
@@ -203,7 +190,7 @@ def auth_spotify():
         return flask.redirect(flask.url_for("home"))
 
 
-@app.route(SPOTIFY_AUTH_REDIRECT_ROUTE_NAME)
+@app.route("/spotify-authorization-callback")
 def auth_spotify_callback():
     """Callback route for Spotify auth"""
     try:
@@ -247,7 +234,7 @@ def auth_youtube():
     except SessionNotCreatedException:
         return flask.redirect(flask.url_for("home"))
 
-@app.route(YOUTUBE_AUTH_REDIRECT_ROUTE_NAME)
+@app.route("/youtube-authorization-callback")
 def auth_youtube_callback():
     """Callback route for YouTube auth"""
 

@@ -16,7 +16,11 @@ class YouTubeClient(OAuth2Session):
         )
 
     def get_playlist_items(self, playlist_id):
-        """Get playlist items by id"""
+        """
+        Get playlist items by id
+
+        Sample playlist id: RD2Vv-BfVoq4g
+        """
         return self.get("https://www.googleapis.com/youtube/v3/playlistItems", {
             "part": "snippet",
             "playlistId": playlist_id,
