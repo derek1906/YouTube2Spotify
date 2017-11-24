@@ -118,16 +118,44 @@ class OAuth2Session(object):
             "Authorization": "{} {}".format(token["type"], token["access"])
         }
 
-    def get(self, method, params=None):
-        """Get request"""
+    def make_get_request(self, method, params=None):
+        """Make raw get request"""
         params = params or {}
 
         auth_header = self.get_auth_header()
         res = requests.get(method, headers=auth_header, params=params)
 
+        return res
+
+    def get(self, method, params=None):
+        """Get request"""
+        res = self.make_get_request(method, params)
+
+        if res.status_code != 200:
+            raise OAuth2Session.Exceptions.RequestFailedException()
+
         try:
             data = res.json()
+            return data
         except ValueError:
             raise OAuth2Session.Exceptions.RequestFailedException()
 
-        return data
+    def post(self, method, body=None):
+        """Post request"""
+        body = body or {}
+
+        auth_header = self.get_auth_header()
+        auth_header.update({
+            "Content-Type": "application/json"
+        })
+
+        res = requests.post(method, headers=auth_header, json=body)
+        if res.status_code not in [200, 201]:
+            raise OAuth2Session.Exceptions.PostRequestFailedException()
+
+        try:
+            data = res.json()
+            return data
+        except ValueError:
+            # POST suceeded but returned data is not valid JSON
+            return data

@@ -15,10 +15,10 @@ class YouTubeClient(OAuth2Session):
             "https://accounts.google.com/o/oauth2/token"
         )
 
-    def get_user_profile(self):
-        """Get user profile"""
-        return self.get("https://api.spotify.com/v1/me")
-
-    def get_user_playlists(self):
-        """Get user playlists"""
-        return self.get("https://api.spotify.com/v1/me/playlists")
+    def get_playlist_items(self, playlist_id):
+        """Get playlist items by id"""
+        return self.get("https://www.googleapis.com/youtube/v3/playlistItems", {
+            "part": "snippet",
+            "playlistId": playlist_id,
+            "maxResults": 50
+        })

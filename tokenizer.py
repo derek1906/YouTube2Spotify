@@ -109,60 +109,31 @@ def get_session_data(*namespaces):
     except KeyError:
         raise SessionNamespaceNotFoundException()
 
-def spotify_search_track(query, access_token, attempt=0):
-    """Search for a track on Spotify"""
-    SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search?"
+def set_session_data(*namespaces, **props):
+    """Set session data"""
+    if "data" not in props:
+        raise TypeError("Missing \"data\"")
 
-    failed_res = {
-        "name": None,
-        "uri": None
-    }
+    obj = session_data[get_session_id()]
 
-    if attempt > 2:
-        # Assume failed
-        return failed_res
+    for namespace in namespaces[:-1]:
+        if namespace not in obj:
+            obj[namespace] = {}
+        obj = obj[namespace]
 
-    parameters = {
-        "q": unicode(query).encode("utf-8"),
-        "type": "track",
-        "limit": 1,
-        "access_token": access_token
-    }
-    print(u"Querying Spotify #{}: {}".format(attempt, query))
-    res = requests.get(SPOTIFY_SEARCH_URL + urlencode(parameters))
-    if res.status_code != 200:
-        if res.status_code == 429:
-            # Wait a while
-            wait_duration = int(res.headers["Retry-After"])
-            if wait_duration > 10:
-                # Assume failed
-                return failed_res
-            else:
-                time.sleep(wait_duration)
-                return spotify_search_track(query, access_token, attempt + 1)
-        else:
-            msg = u"Error getting Spotify search results\n{}".format(res.text)
-            print(msg)
-            return failed_res
+    obj[namespaces[-1]] = props["data"]
 
+def remove_session_data(*namespaces):
+    """Remove session data"""
     try:
-        res_dict = json.loads(res.text)
-        items = res_dict["tracks"]["items"]
-    except Exception as e:
-        msg = u"Error parsing response:\n" + res.text
-        traceback.print_exc()
-        return failed_res
+        obj = session_data[get_session_id()]
+        for namespace in namespaces[:-1]:
+            obj = obj[namespace]
 
-    # Check if there is at least one result
-    if len(items) < 1:
-        return failed_res
+        del obj[namespaces[-1]]
 
-    item = items[0]
-
-    return {
-        "name": item["name"],
-        "uri": item["uri"]
-    }
+    except KeyError:
+        raise SessionNamespaceNotFoundException()
 
 def process_youtube_name(name):
     """Clean up a YouTube video name. Removes (...), [...] and ft. ..."""
@@ -179,9 +150,8 @@ def create_session():
     flask.session["session_id"] = session_id
 
     session_data[session_id] = {
-        "auths": {},
-        "translation_result": [],
-        "oauth_sessions": {}
+        "oauth_sessions": {},
+        "ongoing_translation": {}
     }
 
     return flask.redirect(flask.url_for("home"))
@@ -315,10 +285,33 @@ def request_token():
         session.request_new_token()
 
         # Return to homepage
-        return flask.redirect(flask.url_for("home"))        
+        return flask.redirect(flask.url_for("home"))
 
     except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home")) 
+        return flask.redirect(flask.url_for("home"))
+
+    except SessionNamespaceNotFoundException:
+        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.NotAuthorizedException:
+        return "Not authorized", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
+        return "Request access token failed", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.RequestFailedException:
+        return "Request failed", status.HTTP_400_BAD_REQUEST
+
+@app.route("/test")
+def test():
+    try:
+        youtube_session = get_session_data("oauth_sessions", "youtube")
+        playlist_items = youtube_session.get_playlist_items("RD2Vv-BfVoq4g")
+
+        return "<pre>{}</pre>".format(json.dumps(playlist_items, indent=4))
+
+    except SessionNotCreatedException:
+        return flask.redirect(flask.url_for("home"))
 
     except SessionNamespaceNotFoundException:
         return "OAuth session not created", status.HTTP_400_BAD_REQUEST
@@ -335,118 +328,123 @@ def request_token():
 @app.route(("/read_youtube_playlist"))
 def read_youtube_playlist():
     """Route for translating videos in YouTube playlist into tracks in Spotify"""
+    try:
+        playlist_id = flask.request.args.get("youtube_playlist_id")
+        if playlist_id is None:
+            return "Invalid request", status.HTTP_400_BAD_REQUEST
 
-    YOUTUBE_GET_PLAYLIST_URL = "https://www.googleapis.com/youtube/v3/playlistItems?"
+        spotify_session = get_session_data("oauth_sessions", "spotify")
+        youtube_session = get_session_data("oauth_sessions", "youtube")
 
-    session_id = get_session_id()
-    if session_id is None:
+        # Fetch playlist item names
+        playlist_items = youtube_session.get_playlist_items(playlist_id)
+        playlist_item_names = [item["snippet"]["title"] for item in playlist_items["items"]]
+
+        # Look for Spotify mappings
+        spotify_mappings = [
+            spotify_session.search_track(process_youtube_name(youtube_name))
+            for youtube_name in playlist_item_names
+        ]
+
+        # Organize result
+        items = [{"youtube": youtube_names, "spotify": spotify_mapping} for
+                 (youtube_names, spotify_mapping) in zip(playlist_item_names, spotify_mappings)]
+
+        set_session_data("ongoing_translation", "mappings", data=items)
+
+        return flask.render_template("youtube_playlist_display.html",
+                                     youtube_playlist_id=playlist_id, items=items)
+
+    except SessionNotCreatedException:
         return flask.redirect(flask.url_for("home"))
-    auths = session_data[session_id]["auths"]
 
-    # Get YouTube playlist id
+    except SessionNamespaceNotFoundException:
+        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.NotAuthorizedException:
+        return "Not authorized", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
+        return "Request access token failed", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.RequestFailedException:
+        return "Request failed", status.HTTP_400_BAD_REQUEST
+
+@app.route("/select_export_playlist", methods=["GET", "POST"])
+def select_export_playlist():
     try:
-        youtube_playlist_id = flask.request.args.get("youtube_playlist_id")
-    except Exception:
-        msg = "Invalid request"
-        return msg, status.HTTP_400_BAD_REQUEST
+        if flask.request.method == "POST":
+            # Get necessary data
+            spotify_session = get_session_data("oauth_sessions", "spotify")
 
-    # Get service session data
-    if "youtube" not in auths:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    youtube_service_data = auths["youtube"]
+            profile = get_session_data("ongoing_translation", "profile")
+            playlists = get_session_data("ongoing_translation", "playlists")
+            mappings = get_session_data("ongoing_translation", "mappings")
 
-    # Get service session access token
-    if "access_token" not in youtube_service_data:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    youtube_access_token = youtube_service_data["access_token"]
+            track_uris = [
+                mapping["spotify"]["uri"] for mapping in mappings
+                if mapping["spotify"]["uri"] is not None
+            ]
 
-    # Get service session data
-    if "spotify" not in auths:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    spotify_service_data = auths["spotify"]
+            # Get selected playlist id
+            playlist_id = flask.request.form["playlist_id"]
 
-    # Get service session access token
-    if "access_token" not in spotify_service_data:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    spotify_access_token = spotify_service_data["access_token"]
+            # Check if playlist id is valid
+            if playlist_id not in [playlist["id"] for playlist in playlists]:
+                return "Invalid playlist id", status.HTTP_400_BAD_REQUEST
 
-    # Get playlist details
-    parameters = {
-        "part": "snippet",
-        "playlistId": youtube_playlist_id,
-        "maxResults": 50,
-        "access_token": youtube_access_token
-    }
+            # Add tracks to playlist
+            spotify_session.add_tracks_to_playlist(profile["id"], playlist_id, track_uris)
 
-    # Get playlist details
-    res = requests.get(YOUTUBE_GET_PLAYLIST_URL + urlencode(parameters))
-    if res.status_code != 200:
-        msg = u"Error getting playlist details\n{}".format(res.text)
-        return msg, status.HTTP_400_BAD_REQUEST
+            # Remove ongoing data
+            remove_session_data("ongoing_translation")            
 
-    try:
-        res_dict = json.loads(res.text)
-    except Exception:
-        msg = u"Error parsing response:\n" + cgi.escape(res.text)
-        return msg, status.HTTP_400_BAD_REQUEST
+            # Success
+            return "Added {} tracks to {}.".format(len(track_uris), playlist_id)
 
-    youtube_video_names = [item["snippet"]["title"] for item in res_dict["items"]]
+        else:
+            spotify_session = get_session_data("oauth_sessions", "spotify")
 
-    spotify_mappings = [
-        spotify_search_track(process_youtube_name(youtube_name), spotify_access_token)
-        for youtube_name in youtube_video_names
-    ]
+            # Get user profile and playlists
+            profile = spotify_session.get_user_profile()
+            playlists = spotify_session.get_user_playlists()
 
+            # Clean data
+            profile = {
+                "id": profile["id"],
+                "display_name": profile["display_name"],
+                "external_url": profile["external_urls"]["spotify"]
+            }
+            playlists = [{
+                "id": playlist["id"],
+                "name": playlist["name"],
+                "external_url": playlist["external_urls"]["spotify"]
+            } for playlist in playlists["items"]]
 
-    # Organize results
-    items = [{"youtube": youtube_names, "spotify": spotify_mapping} for
-             (youtube_names, spotify_mapping) in zip(youtube_video_names, spotify_mappings)]
+            # Store info
+            set_session_data("ongoing_translation", "profile", data=profile)
+            set_session_data("ongoing_translation", "playlists", data=playlists)
 
-    session_data[session_id]["translation_result"] = items
+            # Render page
+            return flask.render_template("select_spotify_playlist.html",
+                                         profile=profile, playlists=playlists)
 
-    return flask.render_template("youtube_playlist_display.html",
-                           youtube_playlist_id=youtube_playlist_id, items=items)
+    except SessionNotCreatedException:
+        return flask.redirect(flask.url_for("home"))
 
-@app.route("/apply_translation", methods=["POST"])
-def apply_translation():
-    SPOTIFY_GET_PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists"
-    SPOTIFY_ADD_TRACKS_TO_PLAYLIST_URL = "https://api.spotify.com/v1/users/{user_id}/playlists/{playlist_id}/tracks"
+    except SessionNamespaceNotFoundException:
+        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
 
-    raise NotImplementedError()
+    except OAuth2Session.Exceptions.NotAuthorizedException:
+        return "Not authorized", status.HTTP_400_BAD_REQUEST
 
-    session_id = get_session_id()
-    if session_id is None:
-        msg = "Session missing."
-        return msg, status.HTTP_400_BAD_REQUEST
+    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
+        return "Request access token failed", status.HTTP_400_BAD_REQUEST
 
-    auths = session_data[session_id]["auths"]
+    except OAuth2Session.Exceptions.RequestFailedException:
+        return "Request failed", status.HTTP_400_BAD_REQUEST
 
-    # Get service session data
-    if "spotify" not in auths:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    spotify_service_data = auths["spotify"]
-
-    # Get service session access token
-    if "access_token" not in spotify_service_data:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    spotify_access_token = spotify_service_data["access_token"]
-
-    translation_result = session_data[session_id]["translation_result"]
-    # Get translation result
-    if not translation_result:
-        msg = "Empty translation result."
-        return msg, status.HTTP_400_BAD_REQUEST
-
-    # Get Sptofiy playlist id to add to
-    playlist_id = flask.request.form["playlist_id"]
-
-    # Add tracks to Spotify playlist
-    
+    except OAuth2Session.Exceptions.PostRequestFailedException:
+        return "Failed to add tracks to playlist", status.HTTP_400_BAD_REQUEST
 
 app.run(debug=True, host="0.0.0.0", threaded=True)

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Select export playlist</title>
+</head>
+<body>
+	<h1>Select a playlist from <a href="{{ profile.external_url }}" target="_blank">{{ profile.display_name }}</a></h1>
+	<form method="post">
+		<table border>
+			<thead>
+				<tr>
+					<th>Playlist Name</th>
+					<th>Playlist ID</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				{% for playlist in playlists %}
+				<tr>
+					<td><a href="{{ playlist.external_url }}" target="_blank">{{ playlist.name }}</a></td>
+					<td>{{ playlist.id }}</td>
+					<td><button name="playlist_id" value="{{ playlist.id }}" type="submit">Select</button>
+				</tr>
+				{% endfor %}
+			</tbody>
+		</table>
+	</form>
+</body>
+</html>

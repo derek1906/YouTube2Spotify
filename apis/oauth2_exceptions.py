@@ -11,3 +11,6 @@ class AccessTokenRequestFailedException(Exception):
 
 class RequestFailedException(Exception):
     """Failed to complete request"""
+
+class PostRequestFailedException(Exception):
+    """Failed to complete POST request"""
