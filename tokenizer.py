@@ -16,7 +16,9 @@ import requests
 import flask
 from flask_api import status
 
-from spotify_api import SpotifyClient
+from apis.oauth2 import OAuth2Session
+from apis.spotify_api import SpotifyClient
+from apis.youtube_api import YouTubeClient
 
 
 # pylint: disable=C0103
@@ -96,92 +98,16 @@ def get_session_id():
     except KeyError:
         raise SessionNotCreatedException()
 
-def get_session_data(namespace):
+def get_session_data(*namespaces):
     """Get session data"""
     try:
-        return session_data[get_session_id()][namespace]
+        data = session_data[get_session_id()]
+        for namespace in namespaces:
+            data = data[namespace]
+
+        return data
     except KeyError:
         raise SessionNamespaceNotFoundException()
-
-def spotify_request_new_token(authorization_code):
-    """Request new token from Spotify with an auth code"""
-    SPOTIFY_REQUEST_TOKEN_URL = "https://accounts.spotify.com/api/token"
-
-    payload = {
-        "grant_type": "authorization_code",
-        "code": authorization_code,
-        "redirect_uri": SPOTIFY_AUTH_REDIRECT_URI,
-        "client_id": CLIENT_INFO["spotify"]["client_id"],
-        "client_secret": CLIENT_INFO["spotify"]["client_secret"]
-    }
-    res = requests.post(SPOTIFY_REQUEST_TOKEN_URL, data=payload)
-
-    if res.status_code != 200:
-        msg = u"Error getting refresh and access tokens"
-        print(msg)
-        return None
-
-    try:
-        res_dict = json.loads(res.text)
-    except Exception as e:
-        msg = u"Error parsing response:\n" + cgi.escape(res.text)
-        print(msg)
-        return None
-
-    return res_dict
-
-def spotify_refresh_token(refresh_token):
-    """Refresh Spotify token with a refresh token"""
-    SPOTIFY_REFRESH_TOKEN_URL = "https://accounts.spotify.com/api/token"
-
-    payload = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_INFO["spotify"]["client_id"],
-        "client_secret": CLIENT_INFO["spotify"]["client_secret"]
-    }
-    res = requests.post(SPOTIFY_REFRESH_TOKEN_URL, data=payload)
-
-    if res.status_code != 200:
-        msg = u"Error getting refresh and access tokens\n{}".format(res.text)
-        print(msg)
-        return None
-
-    try:
-        res_dict = json.loads(res.text)
-    except Exception:
-        msg = u"Error parsing response:\n" + cgi.escape(res.text)
-        print(msg)
-        return None
-
-    return res_dict
-
-def youtube_request_new_token(authorization_code):
-    """Request new token from YouTube with an auth code"""
-    YOUTUBE_REQUEST_TOKEN_URL = "https://accounts.google.com/o/oauth2/token"
-
-    payload = {
-        "grant_type": "authorization_code",
-        "code": authorization_code,
-        "redirect_uri": YOUTUBE_AUTH_REDIRECT_URI,
-        "client_id": CLIENT_INFO["youtube"]["client_id"],
-        "client_secret": CLIENT_INFO["youtube"]["client_secret"]
-    }
-    res = requests.post(YOUTUBE_REQUEST_TOKEN_URL, data=payload)
-
-    if res.status_code != 200:
-        msg = u"Error getting refresh and access tokens\n{}".format(res.text)
-        print(msg)
-        return None
-
-    try:
-        res_dict = json.loads(res.text)
-    except Exception:
-        msg = u"Error parsing response:\n" + cgi.escape(res.text)
-        print(msg)
-        return None
-
-    return res_dict
 
 def spotify_search_track(query, access_token, attempt=0):
     """Search for a track on Spotify"""
@@ -277,8 +203,11 @@ def remove_session():
 def home():
     """Homepage route"""
     try:
+        # Get session id
         session_id = get_session_id()
-        auths = {k: json.dumps(v, indent=4) for (k, v) in get_session_data("auths").iteritems()}
+
+        # Get authenticated services
+        auths = {k: str(v) for (k, v) in get_session_data("oauth_sessions").iteritems()}
 
         return flask.render_template("status.html", session_id=session_id, auths=auths)
 
@@ -295,7 +224,7 @@ def auth_spotify():
         oauth_sessions["spotify"] = SpotifyClient(
             flask,
             CLIENT_INFO["spotify"]["client_id"], CLIENT_INFO["spotify"]["client_secret"],
-            "http://localhost:5000/auth_spotify_callback")
+            "http://localhost:5000/spotify-authorization-callback")
 
         # Authorize
         return oauth_sessions["spotify"].authorize(SCOPES["spotify"])
@@ -307,121 +236,101 @@ def auth_spotify():
 @app.route(SPOTIFY_AUTH_REDIRECT_ROUTE_NAME)
 def auth_spotify_callback():
     """Callback route for Spotify auth"""
+    try:
+        # Get Spotify OAuth session
+        spotify_session = get_session_data("oauth_sessions", "spotify")
 
-    session_id = get_session_id()
-    if session_id is None:
+        # Handle response
+        spotify_session.hnadle_auth_callback()
+
+        # Return to homepage
         return flask.redirect(flask.url_for("home"))
 
-    try:
-        callback_session_id = flask.request.args.get("state")
-        authorization_code = flask.request.args.get("code")
-    except Exception:
-        msg = "Invalid request"
-        return msg, status.HTTP_400_BAD_REQUEST
+    except SessionNotCreatedException:
+        return flask.redirect(flask.url_for("home"))
 
-    if callback_session_id != session_id:
-        msg = "Unexpected session id"
-        return msg, status.HTTP_400_BAD_REQUEST
+    except SessionNamespaceNotFoundException:
+        return "Unexpected callback from service", status.HTTP_400_BAD_REQUEST
 
-    # Store authorization code for this user
-    session_data[session_id]["auths"]["spotify"].update({
-        "authorization_code": authorization_code
-    })
+    except SpotifyClient.Exceptions.AuthorizationFailedException:
+        return "Authorization failed", status.HTTP_400_BAD_REQUEST
 
-    # Return to homepage
-    return flask.redirect(flask.url_for("home"))
 
 @app.route("/auth_youtube")
 def auth_youtube():
     """Authenticate YouTube"""
 
-    YOUTUBE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth?"
+    try:
+        oauth_sessions = get_session_data("oauth_sessions")
 
-    session_id = get_session_id()
-    if session_id is None:
+        # Create new Spotify OAuth session
+        oauth_sessions["youtube"] = YouTubeClient(
+            flask,
+            CLIENT_INFO["youtube"]["client_id"], CLIENT_INFO["youtube"]["client_secret"],
+            "http://localhost:5000/youtube-authorization-callback")
+
+        # Authorize
+        return oauth_sessions["youtube"].authorize(SCOPES["youtube"], {
+            "response_type": "code"
+        })
+
+    except SessionNotCreatedException:
         return flask.redirect(flask.url_for("home"))
-
-    session_data[session_id]["auths"]["youtube"] = {}
-
-    parameters = {
-        "client_id": CLIENT_INFO["youtube"]["client_id"],
-        "response_type": "code",
-        "redirect_uri": YOUTUBE_AUTH_REDIRECT_URI,
-        "scope": " ".join(SCOPES["youtube"]),
-        "access_type": "online",
-        "state": session_id
-    }
-
-    # Redirect to YouTube for user authorization
-    return flask.redirect(YOUTUBE_AUTH_URL + urlencode(parameters), code=302)
 
 @app.route(YOUTUBE_AUTH_REDIRECT_ROUTE_NAME)
 def auth_youtube_callback():
     """Callback route for YouTube auth"""
 
-    session_id = get_session_id()
-    if session_id is None:
+    try:
+        # Get YouTube OAuth session
+        youtube_session = get_session_data("oauth_sessions", "youtube")
+
+        # Handle response
+        youtube_session.hnadle_auth_callback()
+
+        # Return to homepage
         return flask.redirect(flask.url_for("home"))
 
-    try:
-        authorization_code = flask.request.args.get("code")
-    except Exception:
-        msg = "Invalid request"
-        return msg, status.HTTP_400_BAD_REQUEST
+    except SessionNotCreatedException:
+        return flask.redirect(flask.url_for("home"))
 
-    # Store authorization code for this user
-    session_data[session_id]["auths"]["youtube"].update({
-        "authorization_code": authorization_code
-    })
+    except SessionNamespaceNotFoundException:
+        return "Unexpected callback from service", status.HTTP_400_BAD_REQUEST
 
-    # Return to homepage
-    return flask.redirect(flask.url_for("home"))
+    except SpotifyClient.Exceptions.AuthorizationFailedException:
+        return "Authorization failed", status.HTTP_400_BAD_REQUEST
 
 @app.route("/request_token")
 def request_token():
     """General route for requesting token"""
-
-    session_id = get_session_id()
-    if session_id is None:
-        return flask.redirect(flask.url_for("home"))
-    auths = session_data[session_id]["auths"]
-
-    # Service look up table
-    services = {
-        "spotify": spotify_request_new_token,
-        "youtube": youtube_request_new_token
-    }
-
-    # Get service name
     try:
         service_name = flask.request.args.get("service")
-        if service_name not in services.keys():
-            raise Exception()
-    except Exception:
-        msg = "Invalid request"
-        return msg, status.HTTP_400_BAD_REQUEST
+        if service_name is None:
+            return flask.redirect(flask.url_for("home")) 
 
-    # Get service session data
-    if service_name not in auths:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    service_data = auths[service_name]
+        # Get service OAuth session
+        session = get_session_data("oauth_sessions", service_name)
 
-    # Get service session authorization code
-    if "authorization_code" not in service_data:
-        msg = "Service not authorized yet."
-        return msg, status.HTTP_400_BAD_REQUEST
-    authorization_code = service_data["authorization_code"]
+        # Manually request new token
+        session.request_new_token()
 
-    # Get new token
-    res = services[service_name](authorization_code)
-    if res is None:
-        msg = "Failed to get token for service \"{}\".".format(service_name)
-        return msg, status.HTTP_400_BAD_REQUEST
-    service_data.update(res)
+        # Return to homepage
+        return flask.redirect(flask.url_for("home"))        
 
-    # Return to homepage
-    return flask.redirect(flask.url_for("home"))
+    except SessionNotCreatedException:
+        return flask.redirect(flask.url_for("home")) 
+
+    except SessionNamespaceNotFoundException:
+        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.NotAuthorizedException:
+        return "Not authorized", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
+        return "Request access token failed", status.HTTP_400_BAD_REQUEST
+
+    except OAuth2Session.Exceptions.RequestFailedException:
+        return "Request failed", status.HTTP_400_BAD_REQUEST
 
 @app.route(("/read_youtube_playlist"))
 def read_youtube_playlist():
@@ -539,66 +448,5 @@ def apply_translation():
 
     # Add tracks to Spotify playlist
     
-
-@app.route("/test")
-def test():
-    try:
-        oauth_sessions = get_session_data("oauth_sessions")
-
-        data = oauth_sessions["spotify"].get_user_playlists()
-        return "<pre>{}</pre>".format(json.dumps(data, indent=4))
-
-    except SessionNotCreatedException:
-        """Session not found"""
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
-        """Session namespace not found"""
-        # Should not happen
-        return flask.redirect(flask.url_for("home"))
-
-    except (KeyError, SpotifyClient.Exceptions.NotAuthorizedException):
-        """Spotify not authorized"""
-        return "Not authorized", status.HTTP_400_BAD_REQUEST
-
-    except SpotifyClient.Exceptions.AccessTokenRequestFailedException:
-        """Failed to request access token"""
-        return "Failed to request access token", status.HTTP_400_BAD_REQUEST
-
-    except SpotifyClient.Exceptions.RequestFailedException:
-        """Request failed"""
-        return "Request failed due to unknown reasons", status.HTTP_500_INTERNAL_SERVER_ERROR
-
-@app.route("/test_auth")
-def test_auth():
-    session_id = get_session_id()
-    if session_id is None:
-        return flask.redirect(flask.url_for("home"))
-    oauth_sessions = session_data[session_id]["oauth_sessions"]
-
-    oauth_sessions["spotify"] = SpotifyClient(
-        flask,
-        CLIENT_INFO["spotify"]["client_id"], CLIENT_INFO["spotify"]["client_secret"],
-        "http://localhost:5000/test_cb")
-
-    # Authorize
-    return oauth_sessions["spotify"].authorize(SCOPES["spotify"])
-
-@app.route("/test_cb")
-def test_cb():
-    session_id = get_session_id()
-    if session_id is None:
-        return flask.redirect(flask.url_for("home"))
-    oauth_sessions = session_data[session_id]["oauth_sessions"]
-
-    try:
-        oauth_sessions["spotify"].hnadle_auth_callback()
-        return "Success"
-    except SpotifyClient.Exceptions.AuthorizationFailedException:
-        return "Authorization failed", status.HTTP_500_INTERNAL_SERVER_ERROR
-    except KeyError:
-        return "Authorization not started", status.HTTP_400_BAD_REQUEST
-
-
 
 app.run(debug=True, host="0.0.0.0", threaded=True)

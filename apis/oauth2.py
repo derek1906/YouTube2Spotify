@@ -5,7 +5,7 @@ import time
 from urllib import urlencode
 import requests
 
-import oauth2_exceptions
+import apis.oauth2_exceptions as oauth2_exceptions
 
 #pylint: disable=C0103
 
@@ -14,10 +14,11 @@ class OAuth2Session(object):
 
     Exceptions = oauth2_exceptions
 
-    def __init__(self, flask,
+    def __init__(self, flask, service_name,
                  client_id, client_secret,
                  authorize_url, auth_callback_url, request_token_url):
         self.flask = flask
+        self.service_name = service_name
         self.client_id = client_id
         self.client_secret = client_secret
         self.authorize_url = authorize_url
@@ -25,6 +26,15 @@ class OAuth2Session(object):
         self.request_token_url = request_token_url
 
         self.codes = {}
+
+    def __repr__(self):
+        return str(self)
+
+    def __str__(self):
+        return "<OAuth2Session {} (authenticated: {}, has_token: {})>".format(
+            self.service_name,
+            "authorization_code" in self.codes,
+            "token" in self.codes)
 
     def authorize(self, scopes, extra_params=None):
         """Initiate authorization"""
