@@ -21,18 +21,18 @@
 		<a href="/remove_session">[ End session ]</a>
 	</p>
 	<p>
-		Part 1: Login to services:
+		Required: Login to services:
 		<a href="/auth_spotify">Spotify</a>
 		<a href="/auth_youtube">YouTube</a>
 	</p>
 	<p>
-		Part 2: Request tokens:
-		<a href="/request_token?service=spotify">Spotify</a>
-		<a href="/request_token?service=youtube">YouTube</a>
+		Enter YouTube playlist id:
+		<input id="youtube_playlist_id" placeholder="Enter YouTube playlist id"> <button id="submit_youtube_playlist_id">Submit</button>
 	</p>
 	<p>
-		Part 3: Enter YouTube playlist id:
-		<input id="youtube_playlist_id" placeholder="Enter YouTube playlist id"> <button id="submit_youtube_playlist_id">Submit</button>
+		Click here if you want to manually request tokens:
+		<a href="/request_token?service=spotify">Spotify</a>
+		<a href="/request_token?service=youtube">YouTube</a>
 	</p>
 	<p>
 		Authenticated services:

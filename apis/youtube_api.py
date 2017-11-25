@@ -1,5 +1,5 @@
 """Accessing YouTube APIs"""
-
+import re
 from apis.oauth2 import OAuth2Session
 
 #pylint: disable=C0103
@@ -26,3 +26,8 @@ class YouTubeClient(OAuth2Session):
             "playlistId": playlist_id,
             "maxResults": 50
         })
+
+    @staticmethod
+    def process_youtube_name(name):
+        """Clean up a YouTube video name. Removes (...), [...] and ft. ..."""
+        return re.sub(r"( \[.+?\]| \(.+?\)| ft.+?$)", "", name)

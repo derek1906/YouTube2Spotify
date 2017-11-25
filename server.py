@@ -1,5 +1,4 @@
 """Translate YouTube playlist into Spotify playlist"""
-
 from __future__ import print_function
 from uuid import uuid4
 import hashlib
@@ -7,7 +6,6 @@ import json
 import os
 import sys
 import traceback
-import re
 
 import flask
 from flask_api import status
@@ -79,7 +77,6 @@ class SessionNotCreatedException(Exception):
 
 def get_session_id():
     """Get session id"""
-    print(session_data.session_data)
     try:
         return flask.session["session_id"]
     except KeyError:
@@ -96,10 +93,6 @@ def set_session_data(*namespaces, **props):
 def remove_session_data(*namespaces):
     """Remove session data wrapper"""
     return session_data.remove(get_session_id(), *namespaces)
-
-def process_youtube_name(name):
-    """Clean up a YouTube video name. Removes (...), [...] and ft. ..."""
-    return re.sub(r"( \[.+?\]| \(.+?\)| ft.+?$)", "", name)
 
 
 """
@@ -161,9 +154,6 @@ def create_session():
 def remove_session():
     """End a session"""
     try:
-        # Get current session id
-        session_id = flask.session["session_id"]
-
         # Remove session data
         remove_session_data()
 
@@ -314,7 +304,7 @@ def read_youtube_playlist():
 
         # Look for Spotify mappings
         spotify_mappings = [
-            spotify_session.search_track(process_youtube_name(youtube_name))
+            spotify_session.search_track(YouTubeClient.process_youtube_name(youtube_name))
             for youtube_name in playlist_item_names
         ]
 
@@ -419,6 +409,17 @@ def test():
 
 
 """
+Hooks
+"""
+@app.after_request
+def logging(response):
+    """Simple loggin of session data"""
+    print(session_data.session_data)
+
+    return response
+
+
+"""
 Start server
 """
-app.run(debug=False, host="0.0.0.0", threaded=True)
+app.run(debug=True, host="0.0.0.0", threaded=True)

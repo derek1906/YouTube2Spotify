@@ -1,5 +1,12 @@
 # Don't share client secrets
 client_info.json
+
+# egg-info
+*.egg-info/
+
+# Caches
+.cache/
+__pycache__/
 *.pyc
 Thumbs.db
 .DS_Store
