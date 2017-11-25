@@ -12,6 +12,8 @@ import re
 import flask
 from flask_api import status
 
+from apis.session_data import SessionDataContainer
+
 from apis.oauth2 import OAuth2Session
 from apis.spotify_api import SpotifyClient
 from apis.youtube_api import YouTubeClient
@@ -60,13 +62,13 @@ SCOPES = {
 App configurations
 """
 app = flask.Flask(__name__)
-app.secret_key = os.urandom(24) # create secret key for cookies
+app.secret_key = os.urandom(24) # create secret key for signing cookies
 
 
 """
 Session data storage
 """
-session_data = {}
+session_data = SessionDataContainer()
 
 
 """
@@ -75,56 +77,62 @@ Handy functions
 class SessionNotCreatedException(Exception):
     """Session has not been created"""
 
-class SessionNamespaceNotFoundException(Exception):
-    """Session namespace has not been created"""
-
 def get_session_id():
     """Get session id"""
+    print(session_data.session_data)
     try:
         return flask.session["session_id"]
     except KeyError:
         raise SessionNotCreatedException()
 
 def get_session_data(*namespaces):
-    """Get session data"""
-    try:
-        data = session_data[get_session_id()]
-        for namespace in namespaces:
-            data = data[namespace]
-
-        return data
-    except KeyError:
-        raise SessionNamespaceNotFoundException()
+    """Get session data wrapper"""
+    return session_data.get(get_session_id(), *namespaces)
 
 def set_session_data(*namespaces, **props):
-    """Set session data"""
-    if "data" not in props:
-        raise TypeError("Missing \"data\"")
-
-    obj = session_data[get_session_id()]
-
-    for namespace in namespaces[:-1]:
-        if namespace not in obj:
-            obj[namespace] = {}
-        obj = obj[namespace]
-
-    obj[namespaces[-1]] = props["data"]
+    """Set session data wrapper"""
+    return session_data.set(get_session_id(), *namespaces, **props)
 
 def remove_session_data(*namespaces):
-    """Remove session data"""
-    try:
-        obj = session_data[get_session_id()]
-        for namespace in namespaces[:-1]:
-            obj = obj[namespace]
-
-        del obj[namespaces[-1]]
-
-    except KeyError:
-        raise SessionNamespaceNotFoundException()
+    """Remove session data wrapper"""
+    return session_data.remove(get_session_id(), *namespaces)
 
 def process_youtube_name(name):
     """Clean up a YouTube video name. Removes (...), [...] and ft. ..."""
     return re.sub(r"( \[.+?\]| \(.+?\)| ft.+?$)", "", name)
+
+
+"""
+Decorators
+"""
+def handle_general_exceptions(f):
+    """
+    Handles these exceptions:
+
+    - SessionNotCreatedException
+    - SessionNamespaceNotFoundException
+    - OAuth2Session.Exceptions.NotAuthorizedException
+    - OAuth2Session.Exceptions.AccessTokenRequestFailedException
+    """
+    def wrapper(*args, **kargs):
+        """Wrapper"""
+        try:
+            return f(*args, **kargs)
+
+        except SessionNotCreatedException:
+            return flask.redirect(flask.url_for("home"))
+
+        except SessionDataContainer.Exceptions.NamespaceNotFoundException:
+            return "OAuth session not created", status.HTTP_400_BAD_REQUEST
+
+        except OAuth2Session.Exceptions.NotAuthorizedException:
+            return "Not authorized", status.HTTP_400_BAD_REQUEST
+
+        except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
+            return "Request access token failed", status.HTTP_400_BAD_REQUEST
+
+    wrapper.__name__ = f.__name__
+    return wrapper
 
 
 """
@@ -133,30 +141,45 @@ Routes
 @app.route("/create_session")
 def create_session():
     """Start a session"""
+
+    # Generate a new session id
     session_id = hashlib.sha1(str(uuid4())).hexdigest()
+
+    # Assign session id
     flask.session["session_id"] = session_id
 
-    session_data[session_id] = {
-        "oauth_sessions": {},
-        "ongoing_translation": {}
-    }
+    # Create session data
+    set_session_data(data={
+        "oauth_sessions": {}
+    })
 
+    # Return to homepage
     return flask.redirect(flask.url_for("home"))
+
 
 @app.route("/remove_session")
 def remove_session():
     """End a session"""
-    if "session_id" in flask.session:
+    try:
+        # Get current session id
         session_id = flask.session["session_id"]
 
+        # Remove session data
+        remove_session_data()
+
+        # Remove session id
         flask.session.pop("session_id", None)
 
-        if session_id in session_data:
-            session_data.pop(session_id)
+    except (KeyError, SessionDataContainer.Exceptions.NamespaceNotFoundException):
+        # Session not exist
+        pass
 
+    # Return to homepage
     return flask.redirect(flask.url_for("home"))
 
+
 @app.route("/")
+@handle_general_exceptions
 def home():
     """Homepage route"""
     try:
@@ -171,26 +194,26 @@ def home():
     except SessionNotCreatedException:
         return flask.render_template("guest.html")
 
+
 @app.route("/auth_spotify")
+@handle_general_exceptions
 def auth_spotify():
     """Authenticate Spotify"""
-    try:
-        oauth_sessions = get_session_data("oauth_sessions")
 
-        # Create new Spotify OAuth session
-        oauth_sessions["spotify"] = SpotifyClient(
-            flask,
-            CLIENT_INFO["spotify"]["client_id"], CLIENT_INFO["spotify"]["client_secret"],
-            "http://localhost:5000/spotify-authorization-callback")
+    # Create new Spotify OAuth session
+    spotify_session = SpotifyClient(
+        flask,
+        CLIENT_INFO["spotify"]["client_id"], CLIENT_INFO["spotify"]["client_secret"],
+        "http://localhost:5000/spotify-authorization-callback")
 
-        # Authorize
-        return oauth_sessions["spotify"].authorize(SCOPES["spotify"])
+    set_session_data("oauth_sessions", "spotify", data=spotify_session)
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
+    # Authorize
+    return spotify_session.authorize(SCOPES["spotify"])
 
 
 @app.route("/spotify-authorization-callback")
+@handle_general_exceptions
 def auth_spotify_callback():
     """Callback route for Spotify auth"""
     try:
@@ -203,10 +226,7 @@ def auth_spotify_callback():
         # Return to homepage
         return flask.redirect(flask.url_for("home"))
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
+    except SessionDataContainer.Exceptions.NamespaceNotFoundException:
         return "Unexpected callback from service", status.HTTP_400_BAD_REQUEST
 
     except SpotifyClient.Exceptions.AuthorizationFailedException:
@@ -214,27 +234,26 @@ def auth_spotify_callback():
 
 
 @app.route("/auth_youtube")
+@handle_general_exceptions
 def auth_youtube():
     """Authenticate YouTube"""
 
-    try:
-        oauth_sessions = get_session_data("oauth_sessions")
+    # Create new Spotify OAuth session
+    youtube_session = YouTubeClient(
+        flask,
+        CLIENT_INFO["youtube"]["client_id"], CLIENT_INFO["youtube"]["client_secret"],
+        "http://localhost:5000/youtube-authorization-callback")
 
-        # Create new Spotify OAuth session
-        oauth_sessions["youtube"] = YouTubeClient(
-            flask,
-            CLIENT_INFO["youtube"]["client_id"], CLIENT_INFO["youtube"]["client_secret"],
-            "http://localhost:5000/youtube-authorization-callback")
+    set_session_data("oauth_sessions", "youtube", data=youtube_session)
 
-        # Authorize
-        return oauth_sessions["youtube"].authorize(SCOPES["youtube"], {
-            "response_type": "code"
-        })
+    # Authorize
+    return youtube_session.authorize(SCOPES["youtube"], {
+        "response_type": "code"
+    })
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
 
 @app.route("/youtube-authorization-callback")
+@handle_general_exceptions
 def auth_youtube_callback():
     """Callback route for YouTube auth"""
 
@@ -248,22 +267,21 @@ def auth_youtube_callback():
         # Return to homepage
         return flask.redirect(flask.url_for("home"))
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
+    except SessionDataContainer.Exceptions.NamespaceNotFoundException:
         return "Unexpected callback from service", status.HTTP_400_BAD_REQUEST
 
     except SpotifyClient.Exceptions.AuthorizationFailedException:
         return "Authorization failed", status.HTTP_400_BAD_REQUEST
 
+
 @app.route("/request_token")
+@handle_general_exceptions
 def request_token():
     """General route for requesting token"""
     try:
         service_name = flask.request.args.get("service")
         if service_name is None:
-            return flask.redirect(flask.url_for("home")) 
+            return flask.redirect(flask.url_for("home"))
 
         # Get service OAuth session
         session = get_session_data("oauth_sessions", service_name)
@@ -274,45 +292,12 @@ def request_token():
         # Return to homepage
         return flask.redirect(flask.url_for("home"))
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
-        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.NotAuthorizedException:
-        return "Not authorized", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
-        return "Request access token failed", status.HTTP_400_BAD_REQUEST
-
     except OAuth2Session.Exceptions.RequestFailedException:
         return "Request failed", status.HTTP_400_BAD_REQUEST
 
-@app.route("/test")
-def test():
-    try:
-        youtube_session = get_session_data("oauth_sessions", "youtube")
-        playlist_items = youtube_session.get_playlist_items("RD2Vv-BfVoq4g")
-
-        return "<pre>{}</pre>".format(json.dumps(playlist_items, indent=4))
-
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
-        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.NotAuthorizedException:
-        return "Not authorized", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
-        return "Request access token failed", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.RequestFailedException:
-        return "Request failed", status.HTTP_400_BAD_REQUEST
 
 @app.route(("/read_youtube_playlist"))
+@handle_general_exceptions
 def read_youtube_playlist():
     """Route for translating videos in YouTube playlist into tracks in Spotify"""
     try:
@@ -342,23 +327,19 @@ def read_youtube_playlist():
         return flask.render_template("youtube_playlist_display.html",
                                      youtube_playlist_id=playlist_id, items=items)
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
-        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.NotAuthorizedException:
-        return "Not authorized", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
-        return "Request access token failed", status.HTTP_400_BAD_REQUEST
-
     except OAuth2Session.Exceptions.RequestFailedException:
         return "Request failed", status.HTTP_400_BAD_REQUEST
 
+
 @app.route("/select_export_playlist", methods=["GET", "POST"])
+@handle_general_exceptions
 def select_export_playlist():
+    """
+    Route for
+
+    GET: Selecting playlist to be exported
+    POST: Add tracks to selected playlist
+    """
     try:
         if flask.request.method == "POST":
             # Get necessary data
@@ -384,7 +365,7 @@ def select_export_playlist():
             spotify_session.add_tracks_to_playlist(profile["id"], playlist_id, track_uris)
 
             # Remove ongoing data
-            remove_session_data("ongoing_translation")            
+            remove_session_data("ongoing_translation")
 
             # Success
             return "Added {} tracks to {}.".format(len(track_uris), playlist_id)
@@ -416,22 +397,28 @@ def select_export_playlist():
             return flask.render_template("select_spotify_playlist.html",
                                          profile=profile, playlists=playlists)
 
-    except SessionNotCreatedException:
-        return flask.redirect(flask.url_for("home"))
-
-    except SessionNamespaceNotFoundException:
-        return "OAuth session not created", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.NotAuthorizedException:
-        return "Not authorized", status.HTTP_400_BAD_REQUEST
-
-    except OAuth2Session.Exceptions.AccessTokenRequestFailedException:
-        return "Request access token failed", status.HTTP_400_BAD_REQUEST
-
     except OAuth2Session.Exceptions.RequestFailedException:
         return "Request failed", status.HTTP_400_BAD_REQUEST
 
     except OAuth2Session.Exceptions.PostRequestFailedException:
         return "Failed to add tracks to playlist", status.HTTP_400_BAD_REQUEST
 
-app.run(debug=True, host="0.0.0.0", threaded=True)
+
+@app.route("/test")
+@handle_general_exceptions
+def test():
+    """Test route"""
+    try:
+        youtube_session = get_session_data("oauth_sessions", "youtube")
+        playlist_items = youtube_session.get_playlist_items("RD2Vv-BfVoq4g")
+
+        return "<pre>{}</pre>".format(json.dumps(playlist_items, indent=4))
+
+    except OAuth2Session.Exceptions.RequestFailedException:
+        return "Request failed", status.HTTP_400_BAD_REQUEST
+
+
+"""
+Start server
+"""
+app.run(debug=False, host="0.0.0.0", threaded=True)

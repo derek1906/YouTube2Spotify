@@ -1,4 +1,6 @@
 """Accessing Spotify APIs"""
+from __future__ import print_function
+
 import time
 import math
 
@@ -36,6 +38,8 @@ class SpotifyClient(OAuth2Session):
             try:
                 # Wait for specified amount of seconds
                 wait_duration = int(res.headers["Retry-After"])
+
+                print("HTTP 427 received, sleeping for {} seconds".format(wait_duration))
                 time.sleep(wait_duration)
 
                 # Try again

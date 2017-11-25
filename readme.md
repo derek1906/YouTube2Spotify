@@ -46,6 +46,7 @@ To start:
 - A Flask-based server
 - Concurrent cookie-based session support
 - A lightweight custom OAuth2 package (used for authenticating with Spotify and Google)
+- Session data container
 - Implementation of translation between YouTube video names and Spotify track names
 
 ## Dependencies
